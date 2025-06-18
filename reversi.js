@@ -1,4 +1,3 @@
-
 class Agent{
     constructor(){}
 
@@ -37,6 +36,82 @@ class RandomAgent extends Agent{
         var index = Math.floor(moves.length * Math.random())
         for(var i=0; i<50000000; i++){} // Making it very slow to test time restriction
         return moves[index]
+    }
+}
+
+class Agent404 extends Agent{
+
+    constructor(){
+        super()
+    }
+
+    compute(percept){
+
+        var color = percept['color'] // Gets player's color
+        var wtime = percept['W'] // Gets remaining time of whites color player
+        var btime = percept['B'] // Gets remaining time of blacks color player
+        var board = percept['board'] // Gets the current board's position
+        var moves = board.valid_moves(color)
+        
+        var best_score = -Infinity
+        var best_move = null
+
+        for (let i = 0; i < moves.length; i++) {
+            let score = this.minimax(board, moves[i], color, 10, -Infinity, Infinity, true)
+            if (score > best_score) {
+                best_score = score
+                best_move = moves[i]
+            }
+        }
+
+        return best_move
+    }
+
+    minimax(board, move, color, depth, alpha, beta, maximizingPlayer) {
+
+        // Aplica el movimiento
+        board.move(move.x, move.y, color)
+
+        // Condición de parada: profundidad o sin movimientos
+        if (depth === 0 || board.valid_moves('W').length === 0 && board.valid_moves('B').length === 0) {
+            return this.evaluateBoard(board, color)
+        }
+
+        let nextColor = (color === 'W') ? 'B' : 'W'
+        let moves = board.valid_moves(nextColor)
+
+        if (maximizingPlayer) {
+            let maxEval = -Infinity
+            for (let i = 0; i < moves.length; i++) {
+                let evalu = this.minimax(board, moves[i], nextColor, depth - 1, alpha, beta, false)
+                maxEval = Math.max(maxEval, evalu)
+                alpha = Math.max(alpha, evalu)
+                if (beta <= alpha) break
+            }
+            return maxEval
+        } else {
+            let minEval = Infinity
+            for (let i = 0; i < moves.length; i++) {
+                let evalu = this.minimax(board, moves[i], nextColor, depth - 1, alpha, beta, true)
+                minEval = Math.min(minEval, evalu)
+                beta = Math.min(beta, evalu)
+                if (beta <= alpha) break
+            }
+            return minEval
+        }
+    }
+
+    evaluateBoard(board, color) {
+        // Simple: cuenta la diferencia de piezas
+        let myCount = 0, oppCount = 0
+        let oppColor = (color === 'W') ? 'B' : 'W'
+        for (let i = 0; i < board.length; i++) {
+            for (let j = 0; j < board.length; j++) {
+                if (board[i][j] === color) myCount++
+                else if (board[i][j] === oppColor) oppCount++
+            }
+        }
+        return myCount - oppCount
     }
 }
 
