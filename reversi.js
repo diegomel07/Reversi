@@ -39,80 +39,722 @@ class RandomAgent extends Agent{
     }
 }
 
-class Agent404 extends Agent{
 
-    constructor(){
-        super()
+class Agent404 {
+    constructor() {
+        this.transpositionTable = new Map();
+        this.zobristTable = this.initZobristTable(64); 
     }
 
-    compute(percept){
+    compute(percept) {
+        const color = percept.color;
+        const board = percept.board;
+        const size = board.board.length;
 
-        var color = percept['color'] // Gets player's color
-        var wtime = percept['W'] // Gets remaining time of whites color player
-        var btime = percept['B'] // Gets remaining time of blacks color player
-        var board = percept['board'] // Gets the current board's position
-        var moves = board.valid_moves(color)
-        
-        var best_score = -Infinity
-        var best_move = null
 
-        for (let i = 0; i < moves.length; i++) {
-            let score = this.minimax(board, moves[i], color, 10, -Infinity, Infinity, true)
-            if (score > best_score) {
-                best_score = score
-                best_move = moves[i]
+        // Killer Move: corner grab
+        const corners = [
+            [0, 0], [0, size - 1],
+            [size - 1, 0], [size - 1, size - 1]
+        ];
+        const valid = board.valid_moves(color);
+        for (const move of valid) {
+            for (const [cy, cx] of corners) {
+                if (move.x === cx && move.y === cy) {
+                    return { x: move.x, y: move.y };
+                }
             }
         }
 
-        return best_move
-    }
-
-    minimax(board, move, color, depth, alpha, beta, maximizingPlayer) {
-
-        // Aplica el movimiento
-        board.move(move.x, move.y, color)
-
-        // Condición de parada: profundidad o sin movimientos
-        if (depth === 0 || board.valid_moves('W').length === 0 && board.valid_moves('B').length === 0) {
-            return this.evaluateBoard(board, color)
+        // Killer Move: block opponent
+        const opponent = color === 'W' ? 'B' : 'W';
+        for (const move of valid) {
+            const clone = board.clone();
+            clone.move(move.x, move.y, color);
+            if (!clone.can_play(opponent)) {
+                return { x: move.x, y: move.y };
+            }
         }
 
-        let nextColor = (color === 'W') ? 'B' : 'W'
-        let moves = board.valid_moves(nextColor)
+        // MTD(f)
+        const [x, y] = this.mtdf(board, color, 5);
+        return { x, y };
+    }
 
-        if (maximizingPlayer) {
-            let maxEval = -Infinity
-            for (let i = 0; i < moves.length; i++) {
-                let evalu = this.minimax(board, moves[i], nextColor, depth - 1, alpha, beta, false)
-                maxEval = Math.max(maxEval, evalu)
-                alpha = Math.max(alpha, evalu)
-                if (beta <= alpha) break
+    // mtdf(root, color, depth) {
+    //     let guess = 0;
+    //     let lowerBound = -Infinity;
+    //     let upperBound = Infinity;
+    //     let bestMove = null;
+    //     let firstGuessMove = null;
+
+    //     while (lowerBound < upperBound) {
+    //         const beta = (guess === lowerBound) ? guess + 1 : guess;
+    //         const result = this.alphaBetaWithMove(root, depth, beta - 1, beta, color, true, firstGuessMove);
+    //         guess = result.value;
+    //         bestMove = result.move;
+    //         firstGuessMove = result.move;  // Prioriza en siguientes iteraciones
+
+    //         if (guess < beta) {
+    //             upperBound = guess;
+    //         } else {
+    //             lowerBound = guess;
+    //         }
+    //     }
+
+    //     return bestMove || [0, 0];
+    // }
+
+    mtdf(root, color, maxDepth) {
+        let bestMove = null;
+        for (let depth = 1; depth <= maxDepth; depth++) {
+            let guess = bestMove ? this.evaluate(root, color) : 0;
+            let lowerBound = -Infinity;
+            let upperBound = Infinity;
+            
+            while (lowerBound < upperBound) {
+                const beta = (guess === lowerBound) ? guess + 1 : guess;
+                const result = this.alphaBetaWithMove(root, depth, beta - 1, beta, color, true, bestMove);
+                guess = result.value;
+                bestMove = result.move;
+                
+                if (guess < beta) upperBound = guess;
+                else lowerBound = guess;
             }
-            return maxEval
+        }
+        return bestMove || [0, 0];
+    }
+
+
+    alphaBetaWithMove(board, depth, alpha, beta, color, isRoot = false, firstMove = null) {
+
+        //const hash = board.board.toString();
+        const hash = this.computeHash(board);
+        const ttEntry = this.transpositionTable.get(hash);
+
+        if (ttEntry && ttEntry.depth >= depth) {
+            if (ttEntry.flag === "EXACT") return isRoot ? { value: ttEntry.value, move: ttEntry.bestMove } : { value: ttEntry.value };
+            if (ttEntry.flag === "LOWERBOUND" && ttEntry.value > alpha) alpha = ttEntry.value;
+            if (ttEntry.flag === "UPPERBOUND" && ttEntry.value < beta) beta = ttEntry.value;
+            if (alpha >= beta) return isRoot ? { value: ttEntry.value, move: ttEntry.bestMove } : { value: ttEntry.value };
+        }
+
+        if (depth === 0 || (!board.can_play('W') && !board.can_play('B'))) {
+            const val = this.evaluate(board, color);
+            return { value: val, move: null };
+        }
+
+        const moves = board.valid_moves(color);
+        if (moves.length === 0) {
+            const opponent = color === 'W' ? 'B' : 'W';
+            return this.alphaBetaWithMove(board.clone(), depth - 1, alpha, beta, opponent, false, null);
+        }
+
+        // Ordenamiento de movimientos
+        if (firstMove) {
+            moves.sort((a, b) => {
+                if (a.x === firstMove[0] && a.y === firstMove[1]) return -1;
+                if (b.x === firstMove[0] && b.y === firstMove[1]) return 1;
+                return this.evalMoveStatic(b, board, color) - this.evalMoveStatic(a, board, color);
+            });
         } else {
-            let minEval = Infinity
-            for (let i = 0; i < moves.length; i++) {
-                let evalu = this.minimax(board, moves[i], nextColor, depth - 1, alpha, beta, true)
-                minEval = Math.min(minEval, evalu)
-                beta = Math.min(beta, evalu)
-                if (beta <= alpha) break
+            moves.sort((a, b) => this.evalMoveStatic(b, board, color) - this.evalMoveStatic(a, board, color));
+        }
+
+        let bestValue = -Infinity;
+        let bestMove = null;
+        const opponent = color === 'W' ? 'B' : 'W';
+
+        for (const move of moves) {
+            const y = move.y;
+            const x = move.x;
+            const clone = board.clone();
+
+            if (!clone.move(x, y, color)) continue;
+
+            const result = this.alphaBetaWithMove(clone, depth - 1, -beta, -alpha, opponent);
+            const value = -result.value;
+
+            if (value > bestValue) {
+                bestValue = value;
+                bestMove = [x, y];
             }
-            return minEval
+
+            alpha = Math.max(alpha, value);
+            if (alpha >= beta) break;
+        }
+
+        // Guardar en tabla de transposición
+        let flag = "EXACT";
+        if (bestValue <= alpha) flag = "UPPERBOUND";
+        else if (bestValue >= beta) flag = "LOWERBOUND";
+
+        this.transpositionTable.set(hash, {
+            value: bestValue,
+            depth: depth,
+            flag: flag,
+            bestMove: bestMove
+        });
+
+        return isRoot ? { value: bestValue, move: bestMove } : { value: bestValue };
+    }
+
+    initZobristTable(size) {
+        const table = Array(size).fill().map(() => 
+            Array(size).fill().map(() => ({
+                'W': Math.floor(Math.random() * 2**32),
+                'B': Math.floor(Math.random() * 2**32)
+            }))
+        );
+        return table;
+    }
+    
+    computeHash(board) {
+        let hash = 0;
+        for (let y = 0; y < board.board.length; y++) {
+            for (let x = 0; x < board.board[y].length; x++) {
+                const cell = board.board[y][x];
+                if (cell !== ' ') {
+                    hash ^= this.zobristTable[y][x][cell];
+                }
+            }
+        }
+        return hash;
+    }
+
+    evaluate(board, color) {
+        
+        const size = board.board.length;
+        const positionWeights = this.generatePositionWeights(size);
+        const opponent = color === 'W' ? 'B' : 'W';
+
+        let myDiscs = 0, oppDiscs = 0;
+        let myMoves = board.valid_moves(color).length;
+        let oppMoves = board.valid_moves(opponent).length;
+        let myFrontier = 0, oppFrontier = 0;
+        let myStable = 0, oppStable = 0;
+        let myPlacement = 0, oppPlacement = 0;
+        let myCorners = 0, oppCorners = 0;
+
+        const dirs = [
+            [-1, -1], [-1, 0], [-1, 1],
+            [0, -1],          [0, 1],
+            [1, -1], [1, 0], [1, 1]
+        ];
+
+        let filled = 0;
+
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const cell = board.board[y][x];
+                if (cell === ' ') continue;
+                filled++;
+
+                const weight = positionWeights[y][x] || 0;
+                if (cell === color) {
+                    myDiscs++;
+                    myPlacement += weight;
+
+                    // Stable if in corner or full edge
+                    if ((y === 0 || y === size - 1 || x === 0 || x === size - 1))
+                        myStable++;
+                } else if (cell === opponent) {
+                    oppDiscs++;
+                    oppPlacement += weight;
+
+                    if ((y === 0 || y === size - 1 || x === 0 || x === size - 1))
+                        oppStable++;
+                }
+
+                // Frontier
+                for (const [dy, dx] of dirs) {
+                    const ny = y + dy, nx = x + dx;
+                    if (ny >= 0 && ny < size && nx >= 0 && nx < size && board.board[ny][nx] === ' ') {
+                        if (cell === color) myFrontier++;
+                        else if (cell === opponent) oppFrontier++;
+                        break;
+                    }
+                }
+            }
+        }
+
+        const progress = filled / (size * size);  // 0.0 a 1.0
+
+        // Interpolated weights (early to late game)
+        const w = {
+            corner: 100,
+            stability: 25,
+            mobility: 50 * (1 - progress),
+            placement: 15,
+            frontier: 10,
+            discs: 100 * progress
+        };
+
+        //Final weighted score
+        const score =
+            w.corner * (myCorners - oppCorners) +
+            w.stability * (myStable - oppStable) +
+            w.mobility * (myMoves - oppMoves) +
+            w.placement * (myPlacement - oppPlacement) -
+            w.frontier * (myFrontier - oppFrontier) +
+            w.discs * (myDiscs - oppDiscs);
+
+        return score;
+    }
+
+    generatePositionWeights(size) {
+        const weights = Array(size).fill(0).map(() => Array(size).fill(0));
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                // Ejemplo básico: esquinas valen más, cercanas valen menos
+                const isCorner = (y === 0 || y === size - 1) && (x === 0 || x === size - 1);
+                const isNearCorner = 
+                    (y <= 1 || y >= size - 2) &&
+                    (x <= 1 || x >= size - 2) &&
+                    !isCorner;
+
+                if (isCorner) weights[y][x] = 100;
+                else if (isNearCorner) weights[y][x] = -25;
+                else weights[y][x] = 5;
+            }
+        }
+        return weights;
+    }
+
+
+
+    // Evaluación rápida para ordenar movimientos (prioriza esquinas)
+    // evalMoveStatic(move, board, color) {
+    //     const size = board.board.length;
+    //     const x = move.x, y = move.y;
+
+    //     if ((x === 0 || x === size - 1) && (y === 0 || y === size - 1)) return 100; // esquina
+    //     if ((x === 1 || x === size - 2) && (y === 1 || y === size - 2)) return -50; // cerca esquina (peligro)
+    //     return 0; // neutro
+    // }
+
+        // Evaluación rápida para ordenar movimientos (prioriza esquinas)
+    evalMoveStatic(move, board, color) {
+        const size = board.board.length;
+        const x = move.x, y = move.y;
+        const opponent = color === 'W' ? 'B' : 'W';
+        
+        // Esquinas son las mejores
+        if ((x === 0 || x === size - 1) && (y === 0 || y === size - 1)) return 1000;
+        
+        // Cerca de esquinas son malas
+        if ((x === 1 || x === size - 2) && (y === 1 || y === size - 2)) return -500;
+        
+        // Bordes son buenos
+        if (x === 0 || x === size - 1 || y === 0 || y === size - 1) return 50;
+        
+        // Movimientos que reducen movilidad del oponente
+        const clone = board.clone();
+        clone.move(x, y, color);
+        const oppMobility = clone.valid_moves(opponent).length;
+        const mobilityDiff = board.valid_moves(opponent).length - oppMobility;
+        
+        return mobilityDiff * 10;
+    }
+}
+
+
+
+
+
+class DynamicSmartAgent extends Agent {
+    constructor() {
+        super();
+        // Pesos optimizados para uso con valid_moves
+        this.weights = {
+            corner: 120,
+            nearCorner: -80,
+            edge: 60,
+            mobility: 30,
+            stability: 40,
+            frontier: -20,
+            potential: 15
+        };
+        this.size = 0; // Se establecerá dinámicamente
+    }
+
+    compute(percept) {
+        try {
+            const startTime = Date.now();
+            const color = percept['color'];
+            const board = percept['board'];
+            this.size = board.board.length;
+            const opponentColor = color === 'W' ? 'B' : 'W';
+            
+            // Obtener movimientos válidos actuales
+            const currentMoves = board.valid_moves(color);
+            if (currentMoves.length === 0) return {'x': -1, 'y': -1};
+            if (currentMoves.length === 1) return currentMoves[0];
+
+            // 1. Priorizar esquinas directamente accesibles
+            const cornerMoves = this.getCornerMoves(currentMoves);
+            if (cornerMoves.length > 0) return cornerMoves[0];
+
+            // 2. Analizar movimientos que limitan al oponente
+            const restrictiveMoves = this.getRestrictiveMoves(board, color, currentMoves);
+            if (restrictiveMoves.length > 0) return restrictiveMoves[0];
+
+            // 3. Evaluación estratégica completa
+            return this.evaluateStrategicMoves(board, color, currentMoves, startTime);
+            
+        } catch (error) {
+            console.error("Error en compute:", error);
+            return this.getFallbackMove(percept);
         }
     }
 
-    evaluateBoard(board, color) {
-        // Simple: cuenta la diferencia de piezas
-        let myCount = 0, oppCount = 0
-        let oppColor = (color === 'W') ? 'B' : 'W'
-        for (let i = 0; i < board.length; i++) {
-            for (let j = 0; j < board.length; j++) {
-                if (board[i][j] === color) myCount++
-                else if (board[i][j] === oppColor) oppCount++
+    getCornerMoves(moves) {
+        const corners = [
+            {x: 0, y: 0}, {x: 0, y: this.size-1},
+            {x: this.size-1, y: 0}, {x: this.size-1, y: this.size-1}
+        ];
+        return moves.filter(move => 
+            corners.some(corner => corner.x === move.x && corner.y === move.y)
+        );
+    }
+
+    getRestrictiveMoves(board, color, moves) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        let bestMoves = [];
+        let minOpponentMoves = Infinity;
+
+        // Buscar movimientos que minimicen las opciones del oponente
+        for (const move of moves) {
+            const simBoard = board.clone();
+            simBoard.move(move.x, move.y, color);
+            const opponentMoves = simBoard.valid_moves(opponentColor).length;
+            
+            if (opponentMoves < minOpponentMoves) {
+                minOpponentMoves = opponentMoves;
+                bestMoves = [move];
+            } else if (opponentMoves === minOpponentMoves) {
+                bestMoves.push(move);
             }
         }
-        return myCount - oppCount
+
+        // Filtrar por bordes si hay empate
+        if (bestMoves.length > 1) {
+            const edgeMoves = bestMoves.filter(m => 
+                m.x === 0 || m.x === this.size-1 || m.y === 0 || m.y === this.size-1
+            );
+            if (edgeMoves.length > 0) return edgeMoves;
+        }
+
+        return bestMoves;
     }
+
+    evaluateStrategicMoves(board, color, moves, startTime) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        let bestMove = moves[0];
+        let bestScore = -Infinity;
+        const maxTime = 1500; // 1.5 segundos máximo
+
+        for (const move of moves) {
+            // Verificar tiempo restante
+            if (Date.now() - startTime > maxTime) {
+                console.log("Tiempo límite alcanzado, devolviendo mejor movimiento encontrado");
+                break;
+            }
+
+            const simBoard = board.clone();
+            if (!simBoard.move(move.x, move.y, color)) continue;
+
+            // Calcular puntuación basada en múltiples factores
+            let score = 0;
+
+            // 1. Valor posicional
+            score += this.getPositionalScore(move);
+
+            // 2. Movilidad diferencial
+            const myNewMoves = simBoard.valid_moves(color).length;
+            const oppNewMoves = simBoard.valid_moves(opponentColor).length;
+            score += (myNewMoves - oppNewMoves) * this.weights.mobility;
+
+            // 3. Potencial de movimientos futuros
+            score += this.calculatePotential(simBoard, color) * this.weights.potential;
+
+            // 4. Estabilidad de bordes
+            if (this.isEdgeMove(move)) {
+                score += this.weights.edge;
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = move;
+            }
+        }
+
+        return bestMove;
+    }
+
+    getPositionalScore(move) {
+        // Esquina
+        if ((move.x === 0 || move.x === this.size-1) && 
+            (move.y === 0 || move.y === this.size-1)) {
+            return this.weights.corner;
+        }
+        
+        // Posición adyacente a esquina (mala)
+        if (this.isNearCorner(move.x, move.y)) {
+            return this.weights.nearCorner;
+        }
+        
+        // Borde
+        if (move.x === 0 || move.x === this.size-1 || 
+            move.y === 0 || move.y === this.size-1) {
+            return this.weights.edge;
+        }
+        
+        return 0;
+    }
+
+    isNearCorner(x, y) {
+        const cornerDist = Math.max(2, Math.floor(this.size/10));
+        const corners = [
+            [0, 0], [0, this.size-1],
+            [this.size-1, 0], [this.size-1, this.size-1]
+        ];
+        return corners.some(([cx, cy]) => 
+            Math.abs(x-cx) <= cornerDist && Math.abs(y-cy) <= cornerDist
+        );
+    }
+
+    isEdgeMove(move) {
+        return move.x === 0 || move.x === this.size-1 || 
+               move.y === 0 || move.y === this.size-1;
+    }
+
+    calculatePotential(board, color) {
+        // Calcular casillas vacías adyacentes a fichas del oponente
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        let potential = 0;
+        
+        for (let y = 0; y < this.size; y++) {
+            for (let x = 0; x < this.size; x++) {
+                if (board.board[y][x] === ' ' && this.isAdjacentTo(board, x, y, opponentColor)) {
+                    potential++;
+                }
+            }
+        }
+        
+        return potential;
+    }
+
+    isAdjacentTo(board, x, y, color) {
+        const directions = [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]];
+        return directions.some(([dx, dy]) => {
+            const nx = x + dx, ny = y + dy;
+            return nx >= 0 && nx < this.size && ny >= 0 && ny < this.size && 
+                   board.board[ny][nx] === color;
+        });
+    }
+
+    getFallbackMove(percept) {
+        // Estrategia de emergencia cuando hay errores
+        const board = percept['board'];
+        const color = percept['color'];
+        const moves = board.valid_moves(color);
+        
+        if (moves.length === 0) return {'x': -1, 'y': -1};
+        
+        // Priorizar bordes si es posible
+        const edgeMoves = moves.filter(m => 
+            m.x === 0 || m.x === board.board.length-1 || 
+            m.y === 0 || m.y === board.board.length-1
+        );
+        
+        return edgeMoves.length > 0 ? edgeMoves[0] : moves[0];
+    }
+}
+
+class Agent2 extends Agent {
+  constructor() {
+    super();
+    this.maxDepth = 3;
+  }
+
+  compute(percept) {
+    const color = percept.color;
+    const board = percept.board;
+    // arrancamos con α = -∞, β = +∞
+    const result = this.minmax(board, color, 0, -Infinity, +Infinity, true);
+    if (result.move) {
+      return { x: result.move.x, y: result.move.y };
+    }
+    return null;
+  }
+
+  
+  minmax(board, maxColor, depth, alpha, beta, isMax) {
+    // Caso base: profundidad o fin de juego
+    if (depth >= this.maxDepth || this.isGameOver(board)) {
+      const score = this.evaluateBoard(board, maxColor);
+      return { score: score, move: null };
+    }
+
+    // determino quién juega en este nivel
+    let currentColor = isMax ? maxColor : this.opponentColor(maxColor);
+    const moves = board.valid_moves(currentColor);
+
+    // sin movimientos → evaluar
+    if (moves.length === 0) {
+      const score = this.evaluateBoard(board, maxColor);
+      return { score: score, move: null };
+    }
+
+    let bestMove = null;
+
+    if (isMax) {
+      let bestScore = -Infinity;
+      for (let mv of moves) {
+        const next = board.clone();
+        next.move(mv.x, mv.y, currentColor);
+
+        // recursión en modo minimizador
+        const { score } = this.minmax(next, maxColor, depth + 1, alpha, beta, false);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove  = mv;
+        }
+        alpha = Math.max(alpha, bestScore);
+        if (alpha >= beta) break;  // poda β
+      }
+      return { score: bestScore, move: bestMove };
+
+    } else {
+      let bestScore = +Infinity;
+      for (let mv of moves) {
+        const next = board.clone();
+        next.move(mv.x, mv.y, currentColor);
+
+        // recursión en modo maximizador
+        const { score } = this.minmax(next, maxColor, depth + 1, alpha, beta, true);
+
+        if (score < bestScore) {
+          bestScore = score;
+          bestMove  = mv;
+        }
+        beta = Math.min(beta, bestScore);
+        if (beta <= alpha) break;  // poda α
+      }
+      return { score: bestScore, move: bestMove };
+    }
+  }
+
+  // Primer algoritmo para evaluar
+  
+    evaluateNumberPieces(board, maxColor) {
+    const b = board.board;
+    const n = b.length;
+    let cntMax = 0, cntOpp = 0;
+    const opp = this.opponentColor(maxColor);
+
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+        if (b[y][x] === maxColor) cntMax++;
+        else if (b[y][x] === opp) cntOpp++;
+        }
+    }
+    
+    const totalPieces = cntMax + cntOpp;
+    if (totalPieces === 0) return 0;  // tablero vacío
+
+    if (cntMax > cntOpp)  return 100 * (cntMax / totalPieces);
+    if (cntMax < cntOpp)  return -100 * (cntOpp / totalPieces);
+    return 0;
+    }
+
+    // 2) Movilidad
+    evaluateMov(board, maxColor) {
+    const opp     = this.opponentColor(maxColor);
+    const movMax  = board.valid_moves(maxColor).length;
+    const movOpp  = board.valid_moves(opp)     .length;
+    const total   = movMax + movOpp;
+    if (total === 0) return 0;  // sin movimientos a ambos
+
+    if (movMax > movOpp)  return 100 * (movMax / total);
+    if (movMax < movOpp)  return -100 * (movOpp / total);
+    return 0;
+    }
+
+    
+    evaluateCorner(board, maxColor) {
+    const opp = this.opponentColor(maxColor);
+    const b   = board.board;
+    const n   = b.length;
+    const last = n - 1;
+    
+    if (last < 1) return 0;
+
+    const corners = [
+        b[0][0],
+        b[0][last],
+        b[last][0],
+        b[last][last]
+    ];
+
+    let maxCount = 0, oppCount = 0;
+    for (const c of corners) {
+        if      (c === maxColor) maxCount++;
+        else if (c === opp)      oppCount++;
+    }
+    return 25 * (maxCount - oppCount);
+    }
+
+
+    evaluateAdjacencyCorner(board, maxColor) {
+    const opp = this.opponentColor(maxColor);
+    const b   = board.board;
+    const n   = b.length;
+    const last = n - 1;
+    if (last < 1) return 0;
+
+    
+    const cells = [
+        b[0][1],   b[1][0],   b[1][1],               // UL
+        b[0][last-1], b[1][last], b[1][last-1],     // UR
+        b[last-1][0], b[last][1], b[last-1][1],     // LL
+        b[last-1][last], b[last][last-1], b[last][last] // LR diag, but LR corner is at [last][last]
+    ];
+
+    let maxCount = 0, oppCnt = 0;
+    for (const d of cells) {
+        if      (d === maxColor) maxCount++;
+        else if (d === opp)      oppCnt++;
+    }
+    return -12.5 * maxCount + 12.5 * oppCnt;
+    }
+
+    
+
+    
+    evaluateBoard(board, maxColor) {
+    const p  = this.evaluateNumberPieces    (board, maxColor);
+    const c  = this.evaluateCorner          (board, maxColor);
+    const aC = this.evaluateAdjacencyCorner (board, maxColor);
+    
+
+    //console.log({ pieces: p, corner: c, adjacency: aC });
+    return p + c + aC ;
+    }
+
+
+
+  isGameOver(board) {
+    const wCan = board.can_play('W');
+    const bCan = board.can_play('B');
+    return !wCan && !bCan;
+  }
+
+  opponentColor(color) {
+    return color === 'W' ? 'B' : 'W';
+  }
 }
 
 /////////////////// ENVIRONMENT CLASSES AND DEFINITION /////////////////////////
