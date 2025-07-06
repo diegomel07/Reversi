@@ -40,327 +40,326 @@ class RandomAgent extends Agent{
 }
 
 
-class Agent404 {
+class Agent404 extends Agent {
     constructor() {
-        this.transpositionTable = new Map();
-        this.zobristTable = this.initZobristTable(64); 
+        super();
+        // Pesos dinámicos que se ajustan según el tamaño del tablero
+        this.weights = {
+            corner: 200,       // Incrementado para mayor agresividad en esquinas
+            nearCorner: -120,  // Más penalización por movimientos peligrosos
+            edge: 80,          // Mayor valor a bordes
+            mobility: 40,      // Movilidad más importante
+            stability: 60,     // Estabilidad crítica en tableros grandes
+            frontier: -30,     // Más penalización por discos fronterizos
+            potential: 25,     // Potencial de crecimiento más valorado
+            quadrant: 50       // Nuevo: control de cuadrantes
+        };
+        this.size = 0;
+        this.killerMoves = new Map();  // Movimientos que causan beta-cutoffs
+        this.historyHeuristic = Array.from({length: 32}, () => Array(32).fill(0)); // Para ordenamiento de movimientos
     }
 
     compute(percept) {
+        const startTime = Date.now();
         const color = percept.color;
         const board = percept.board;
-        const size = board.board.length;
+        this.size = board.board.length;
+        const opponentColor = color === 'W' ? 'B' : 'W';
 
+        // 0. Movimientos ganadores inmediatos (nuevo)
+        const winningMove = this.findWinningMove(board, color);
+        if (winningMove) return winningMove;
 
-        // Killer Move: corner grab
-        const corners = [
-            [0, 0], [0, size - 1],
-            [size - 1, 0], [size - 1, size - 1]
-        ];
-        const valid = board.valid_moves(color);
-        for (const move of valid) {
-            for (const [cy, cx] of corners) {
-                if (move.x === cx && move.y === cy) {
-                    return { x: move.x, y: move.y };
+        // 1. Priorizar esquinas directamente accesibles
+        const currentMoves = board.valid_moves(color);
+        if (currentMoves.length === 0) return {'x': -1, 'y': -1};
+        if (currentMoves.length === 1) return currentMoves[0];
+
+        const cornerMoves = this.getCornerMoves(currentMoves);
+        if (cornerMoves.length > 0) return cornerMoves[0];
+
+        // 2. Movimientos que matan la movilidad del oponente (mejorado)
+        const killerMove = this.getKillerMoves(board, color, currentMoves);
+        if (killerMove) return killerMove;
+
+        // 3. Búsqueda estratégica con profundidad adaptativa
+        const maxDepth = this.calculateAdaptiveDepth();
+        const bestMove = this.iterativeDeepening(board, color, currentMoves, startTime, maxDepth);
+        
+        return bestMove || this.getFallbackMove(board, color);
+    }
+
+    // ========== NUEVOS MÉTODOS AVANZADOS ========== //
+
+    findWinningMove(board, color) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        const moves = board.valid_moves(color);
+        
+        for (const move of moves) {
+            const simBoard = board.clone();
+            simBoard.move(move.x, move.y, color);
+            
+            // Si el oponente no puede mover y nosotros sí
+            if (!simBoard.can_play(opponentColor) && simBoard.valid_moves(color).length > 0) {
+                return move;
+            }
+        }
+        return null;
+    }
+
+    calculateAdaptiveDepth() {
+        // Profundidad basada en tamaño y progreso del juego
+        const baseDepth = Math.max(3, 6 - Math.floor(this.size / 8));
+        return Math.min(baseDepth, 5); // Máximo 5 niveles
+    }
+
+    iterativeDeepening(board, color, moves, startTime, maxDepth) {
+        let bestMove = moves[0];
+        let bestScore = -Infinity;
+        const opponentColor = color === 'W' ? 'B' : 'W';
+
+        // Ordenar movimientos usando killer moves e historia heurística
+        this.orderMoves(moves, board, color);
+
+        for (let depth = 1; depth <= maxDepth; depth++) {
+            if (Date.now() - startTime > 1800) break; // Límite de tiempo
+
+            let currentBest = null;
+            let currentScore = -Infinity;
+
+            for (const move of moves) {
+                if (Date.now() - startTime > 1800) break;
+
+                const simBoard = board.clone();
+                if (!simBoard.move(move.x, move.y, color)) continue;
+
+                const score = -this.negamax(simBoard, opponentColor, depth-1, -Infinity, Infinity, startTime);
+
+                if (score > currentScore) {
+                    currentScore = score;
+                    currentBest = move;
                 }
             }
-        }
 
-        // Killer Move: block opponent
-        const opponent = color === 'W' ? 'B' : 'W';
-        for (const move of valid) {
-            const clone = board.clone();
-            clone.move(move.x, move.y, color);
-            if (!clone.can_play(opponent)) {
-                return { x: move.x, y: move.y };
+            if (currentBest && currentScore > bestScore) {
+                bestScore = currentScore;
+                bestMove = currentBest;
             }
         }
 
-        // MTD(f)
-        const [x, y] = this.mtdf(board, color, 5);
-        return { x, y };
+        return bestMove;
     }
 
-    // mtdf(root, color, depth) {
-    //     let guess = 0;
-    //     let lowerBound = -Infinity;
-    //     let upperBound = Infinity;
-    //     let bestMove = null;
-    //     let firstGuessMove = null;
+    negamax(board, color, depth, alpha, beta, startTime) {
+        // Corte por tiempo
+        if (Date.now() - startTime > 1800) return 0;
 
-    //     while (lowerBound < upperBound) {
-    //         const beta = (guess === lowerBound) ? guess + 1 : guess;
-    //         const result = this.alphaBetaWithMove(root, depth, beta - 1, beta, color, true, firstGuessMove);
-    //         guess = result.value;
-    //         bestMove = result.move;
-    //         firstGuessMove = result.move;  // Prioriza en siguientes iteraciones
-
-    //         if (guess < beta) {
-    //             upperBound = guess;
-    //         } else {
-    //             lowerBound = guess;
-    //         }
-    //     }
-
-    //     return bestMove || [0, 0];
-    // }
-
-    mtdf(root, color, maxDepth) {
-        let bestMove = null;
-        for (let depth = 1; depth <= maxDepth; depth++) {
-            let guess = bestMove ? this.evaluate(root, color) : 0;
-            let lowerBound = -Infinity;
-            let upperBound = Infinity;
-            
-            while (lowerBound < upperBound) {
-                const beta = (guess === lowerBound) ? guess + 1 : guess;
-                const result = this.alphaBetaWithMove(root, depth, beta - 1, beta, color, true, bestMove);
-                guess = result.value;
-                bestMove = result.move;
-                
-                if (guess < beta) upperBound = guess;
-                else lowerBound = guess;
-            }
-        }
-        return bestMove || [0, 0];
-    }
-
-
-    alphaBetaWithMove(board, depth, alpha, beta, color, isRoot = false, firstMove = null) {
-
-        //const hash = board.board.toString();
-        const hash = this.computeHash(board);
-        const ttEntry = this.transpositionTable.get(hash);
-
-        if (ttEntry && ttEntry.depth >= depth) {
-            if (ttEntry.flag === "EXACT") return isRoot ? { value: ttEntry.value, move: ttEntry.bestMove } : { value: ttEntry.value };
-            if (ttEntry.flag === "LOWERBOUND" && ttEntry.value > alpha) alpha = ttEntry.value;
-            if (ttEntry.flag === "UPPERBOUND" && ttEntry.value < beta) beta = ttEntry.value;
-            if (alpha >= beta) return isRoot ? { value: ttEntry.value, move: ttEntry.bestMove } : { value: ttEntry.value };
-        }
-
-        if (depth === 0 || (!board.can_play('W') && !board.can_play('B'))) {
-            const val = this.evaluate(board, color);
-            return { value: val, move: null };
-        }
-
+        const opponentColor = color === 'W' ? 'B' : 'W';
         const moves = board.valid_moves(color);
-        if (moves.length === 0) {
-            const opponent = color === 'W' ? 'B' : 'W';
-            return this.alphaBetaWithMove(board.clone(), depth - 1, alpha, beta, opponent, false, null);
-        }
 
-        // Ordenamiento de movimientos
-        if (firstMove) {
-            moves.sort((a, b) => {
-                if (a.x === firstMove[0] && a.y === firstMove[1]) return -1;
-                if (b.x === firstMove[0] && b.y === firstMove[1]) return 1;
-                return this.evalMoveStatic(b, board, color) - this.evalMoveStatic(a, board, color);
-            });
-        } else {
-            moves.sort((a, b) => this.evalMoveStatic(b, board, color) - this.evalMoveStatic(a, board, color));
+        // Nodo terminal o profundidad máxima
+        if (depth === 0 || moves.length === 0) {
+            return this.evaluateBoard(board, color);
         }
 
         let bestValue = -Infinity;
-        let bestMove = null;
-        const opponent = color === 'W' ? 'B' : 'W';
+        const orderedMoves = this.orderMoves(moves, board, color);
 
-        for (const move of moves) {
-            const y = move.y;
-            const x = move.x;
-            const clone = board.clone();
+        for (const move of orderedMoves) {
+            const simBoard = board.clone();
+            if (!simBoard.move(move.x, move.y, color)) continue;
 
-            if (!clone.move(x, y, color)) continue;
-
-            const result = this.alphaBetaWithMove(clone, depth - 1, -beta, -alpha, opponent);
-            const value = -result.value;
-
-            if (value > bestValue) {
-                bestValue = value;
-                bestMove = [x, y];
-            }
-
+            const value = -this.negamax(simBoard, opponentColor, depth-1, -beta, -alpha, startTime);
+            bestValue = Math.max(bestValue, value);
             alpha = Math.max(alpha, value);
-            if (alpha >= beta) break;
+
+            if (alpha >= beta) {
+                // Guardar killer move
+                this.killerMoves.set(depth, move);
+                // Actualizar historia heurística
+                this.historyHeuristic[move.x][move.y] += depth * depth;
+                break;
+            }
         }
 
-        // Guardar en tabla de transposición
-        let flag = "EXACT";
-        if (bestValue <= alpha) flag = "UPPERBOUND";
-        else if (bestValue >= beta) flag = "LOWERBOUND";
-
-        this.transpositionTable.set(hash, {
-            value: bestValue,
-            depth: depth,
-            flag: flag,
-            bestMove: bestMove
-        });
-
-        return isRoot ? { value: bestValue, move: bestMove } : { value: bestValue };
+        return bestValue;
     }
 
-    initZobristTable(size) {
-        const table = Array(size).fill().map(() => 
-            Array(size).fill().map(() => ({
-                'W': Math.floor(Math.random() * 2**32),
-                'B': Math.floor(Math.random() * 2**32)
-            }))
+     getCornerMoves(moves) {
+        const corners = [
+            {x: 0, y: 0}, {x: 0, y: this.size-1},
+            {x: this.size-1, y: 0}, {x: this.size-1, y: this.size-1}
+        ];
+        return moves.filter(move => 
+            corners.some(corner => corner.x === move.x && corner.y === move.y)
         );
-        return table;
     }
-    
-    computeHash(board) {
-        let hash = 0;
-        for (let y = 0; y < board.board.length; y++) {
-            for (let x = 0; x < board.board[y].length; x++) {
-                const cell = board.board[y][x];
-                if (cell !== ' ') {
-                    hash ^= this.zobristTable[y][x][cell];
+
+    orderMoves(moves, board, color) {
+        // Ordenar por: 1. Killer moves, 2. Historia, 3. Evaluación estática
+        return [...moves].sort((a, b) => {
+            // Killer moves primero
+            const killerA = this.killerMoves.has(a) ? 1 : 0;
+            const killerB = this.killerMoves.has(b) ? 1 : 0;
+            if (killerA !== killerB) return killerB - killerA;
+
+            // Luego historia heurística
+            const historyA = this.historyHeuristic[a.x][a.y];
+            const historyB = this.historyHeuristic[b.x][b.y];
+            if (historyA !== historyB) return historyB - historyA;
+
+            // Finalmente evaluación estática
+            return this.evaluateMove(b, board, color) - this.evaluateMove(a, board, color);
+        });
+    }
+
+    evaluateMove(move, board, color) {
+        let score = 0;
+        const opponentColor = color === 'W' ? 'B' : 'W';
+
+        // 1. Valor posicional
+        score += this.getPositionalScore(move);
+
+        // 2. Movilidad diferencial
+        const simBoard = board.clone();
+        simBoard.move(move.x, move.y, color);
+        const myMoves = simBoard.valid_moves(color).length;
+        const oppMoves = simBoard.valid_moves(opponentColor).length;
+        score += (myMoves - oppMoves) * this.weights.mobility;
+
+        // 3. Control de cuadrante (nuevo)
+        score += this.getQuadrantControl(move, board.board.length) * this.weights.quadrant;
+
+        return score;
+    }
+
+    getQuadrantControl(move, size) {
+        const quadSize = Math.floor(size / 4);
+        const quadX = Math.floor(move.x / quadSize);
+        const quadY = Math.floor(move.y / quadSize);
+        
+        // Los cuadrantes centrales son menos valiosos
+        return (quadX === 0 || quadX === 3 || quadY === 0 || quadY === 3) ? 1 : -1;
+    }
+
+    evaluateBoard(board, color) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        let score = 0;
+
+        // 1. Valor posicional de todas las fichas
+        for (let y = 0; y < this.size; y++) {
+            for (let x = 0; x < this.size; x++) {
+                if (board.board[y][x] === color) {
+                    score += this.getPositionalScore({x, y});
+                } else if (board.board[y][x] === opponentColor) {
+                    score -= this.getPositionalScore({x, y});
                 }
             }
         }
-        return hash;
+
+        // 2. Movilidad diferencial
+        const myMoves = board.valid_moves(color).length;
+        const oppMoves = board.valid_moves(opponentColor).length;
+        score += (myMoves - oppMoves) * this.weights.mobility;
+
+        // 3. Estabilidad de discos (nuevo)
+        score += this.calculateStability(board, color) * this.weights.stability;
+
+        // 4. Control de cuadrantes (nuevo)
+        score += this.evaluateQuadrants(board, color) * this.weights.quadrant;
+
+        return score;
     }
 
-    evaluate(board, color) {
-        
-        const size = board.board.length;
-        const positionWeights = this.generatePositionWeights(size);
-        const opponent = color === 'W' ? 'B' : 'W';
+    calculateStability(board, color) {
+        // Discos estables son aquellos que no pueden ser volteados
+        let stableCount = 0;
+        const opponentColor = color === 'W' ? 'B' : 'W';
 
-        let myDiscs = 0, oppDiscs = 0;
-        let myMoves = board.valid_moves(color).length;
-        let oppMoves = board.valid_moves(opponent).length;
-        let myFrontier = 0, oppFrontier = 0;
-        let myStable = 0, oppStable = 0;
-        let myPlacement = 0, oppPlacement = 0;
-        let myCorners = 0, oppCorners = 0;
-
-        const dirs = [
-            [-1, -1], [-1, 0], [-1, 1],
-            [0, -1],          [0, 1],
-            [1, -1], [1, 0], [1, 1]
-        ];
-
-        let filled = 0;
-
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                const cell = board.board[y][x];
-                if (cell === ' ') continue;
-                filled++;
-
-                const weight = positionWeights[y][x] || 0;
-                if (cell === color) {
-                    myDiscs++;
-                    myPlacement += weight;
-
-                    // Stable if in corner or full edge
-                    if ((y === 0 || y === size - 1 || x === 0 || x === size - 1))
-                        myStable++;
-                } else if (cell === opponent) {
-                    oppDiscs++;
-                    oppPlacement += weight;
-
-                    if ((y === 0 || y === size - 1 || x === 0 || x === size - 1))
-                        oppStable++;
-                }
-
-                // Frontier
-                for (const [dy, dx] of dirs) {
-                    const ny = y + dy, nx = x + dx;
-                    if (ny >= 0 && ny < size && nx >= 0 && nx < size && board.board[ny][nx] === ' ') {
-                        if (cell === color) myFrontier++;
-                        else if (cell === opponent) oppFrontier++;
-                        break;
+        for (let y = 0; y < this.size; y++) {
+            for (let x = 0; x < this.size; x++) {
+                if (board.board[y][x] === color) {
+                    if (this.isStable(board, x, y)) {
+                        stableCount++;
+                    }
+                } else if (board.board[y][x] === opponentColor) {
+                    if (this.isStable(board, x, y)) {
+                        stableCount--;
                     }
                 }
             }
         }
 
-        const progress = filled / (size * size);  // 0.0 a 1.0
+        return stableCount;
+    }
 
-        // Interpolated weights (early to late game)
-        const w = {
-            corner: 100,
-            stability: 25,
-            mobility: 50 * (1 - progress),
-            placement: 15,
-            frontier: 10,
-            discs: 100 * progress
-        };
+    isStable(board, x, y) {
+        // Simplificado: discos en bordes son estables
+        return x === 0 || x === this.size-1 || y === 0 || y === this.size-1;
+    }
 
-        //Final weighted score
-        const score =
-            w.corner * (myCorners - oppCorners) +
-            w.stability * (myStable - oppStable) +
-            w.mobility * (myMoves - oppMoves) +
-            w.placement * (myPlacement - oppPlacement) -
-            w.frontier * (myFrontier - oppFrontier) +
-            w.discs * (myDiscs - oppDiscs);
+    evaluateQuadrants(board, color) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        const quadSize = Math.max(2, Math.floor(this.size / 4));
+        let score = 0;
+
+        for (let qy = 0; qy < this.size; qy += quadSize) {
+            for (let qx = 0; qx < this.size; qx += quadSize) {
+                let myCount = 0, oppCount = 0;
+                const endY = Math.min(qy + quadSize, this.size);
+                const endX = Math.min(qx + quadSize, this.size);
+
+                for (let y = qy; y < endY; y++) {
+                    for (let x = qx; x < endX; x++) {
+                        if (board.board[y][x] === color) myCount++;
+                        else if (board.board[y][x] === opponentColor) oppCount++;
+                    }
+                }
+
+                if (myCount > oppCount) score++;
+                else if (oppCount > myCount) score--;
+            }
+        }
 
         return score;
     }
 
-    generatePositionWeights(size) {
-        const weights = Array(size).fill(0).map(() => Array(size).fill(0));
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                // Ejemplo básico: esquinas valen más, cercanas valen menos
-                const isCorner = (y === 0 || y === size - 1) && (x === 0 || x === size - 1);
-                const isNearCorner = 
-                    (y <= 1 || y >= size - 2) &&
-                    (x <= 1 || x >= size - 2) &&
-                    !isCorner;
+    getKillerMoves(board, color, moves) {
+        const opponentColor = color === 'W' ? 'B' : 'W';
+        let bestMove = null;
+        let minOpponentMoves = Infinity;
 
-                if (isCorner) weights[y][x] = 100;
-                else if (isNearCorner) weights[y][x] = -25;
-                else weights[y][x] = 5;
+        for (const move of moves) {
+            const simBoard = board.clone();
+            simBoard.move(move.x, move.y, color);
+            const opponentMoves = simBoard.valid_moves(opponentColor).length;
+
+            if (opponentMoves === 0) {
+                // Si podemos dejar al oponente sin movimientos, es killer
+                return move;
+            }
+
+            if (opponentMoves < minOpponentMoves) {
+                minOpponentMoves = opponentMoves;
+                bestMove = move;
             }
         }
-        return weights;
+
+        return bestMove;
     }
 
+    getFallbackMove(board, color) {
+        const moves = board.valid_moves(color);
+        if (moves.length === 0) return {'x': -1, 'y': -1};
 
-
-    // Evaluación rápida para ordenar movimientos (prioriza esquinas)
-    // evalMoveStatic(move, board, color) {
-    //     const size = board.board.length;
-    //     const x = move.x, y = move.y;
-
-    //     if ((x === 0 || x === size - 1) && (y === 0 || y === size - 1)) return 100; // esquina
-    //     if ((x === 1 || x === size - 2) && (y === 1 || y === size - 2)) return -50; // cerca esquina (peligro)
-    //     return 0; // neutro
-    // }
-
-        // Evaluación rápida para ordenar movimientos (prioriza esquinas)
-    evalMoveStatic(move, board, color) {
-        const size = board.board.length;
-        const x = move.x, y = move.y;
-        const opponent = color === 'W' ? 'B' : 'W';
-        
-        // Esquinas son las mejores
-        if ((x === 0 || x === size - 1) && (y === 0 || y === size - 1)) return 1000;
-        
-        // Cerca de esquinas son malas
-        if ((x === 1 || x === size - 2) && (y === 1 || y === size - 2)) return -500;
-        
-        // Bordes son buenos
-        if (x === 0 || x === size - 1 || y === 0 || y === size - 1) return 50;
-        
-        // Movimientos que reducen movilidad del oponente
-        const clone = board.clone();
-        clone.move(x, y, color);
-        const oppMobility = clone.valid_moves(opponent).length;
-        const mobilityDiff = board.valid_moves(opponent).length - oppMobility;
-        
-        return mobilityDiff * 10;
+        // Priorizar bordes y evitar centro
+        return moves.reduce((best, current) => {
+            const currentScore = this.evaluateMove(current, board, color);
+            const bestScore = this.evaluateMove(best, board, color);
+            return currentScore > bestScore ? current : best;
+        }, moves[0]);
     }
 }
-
-
-
-
 
 class DynamicSmartAgent extends Agent {
     constructor() {
